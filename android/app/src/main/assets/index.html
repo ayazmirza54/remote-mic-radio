@@ -244,7 +244,7 @@ fake.host = fake.hosts[0];
 const RM = window.RM || {
   status: () => JSON.stringify({ supported: true, bt_on: true, registered: true, state: fake.state, holding: false, error: '', last: fake.last,
                                  phone: 'Pixel', host: fake.host, hosts: fake.hosts, preferred: fake.host.address }),
-  tap: c => { fake.last = c; return 'ok'; }, hold: c => { fake.last = c + ' (held)'; return 'ok'; }, release() {},
+  tap: c => { fake.last = c; return 'ok'; }, hold: c => { fake.last = c + ' (held)'; return 'ok'; }, release() {}, beat() {},
   connect: a => { fake.host = fake.hosts.find(h => h.address === a); setTimeout(() => window.onNative(), 300); },
   disconnect() {}, retry() {}, discoverable() {}, openBluetoothSettings() {}, vibrate() {},
   agent: () => '', useWifi: () => 'Preview only: install the APK.', useBluetooth() {}
@@ -254,7 +254,7 @@ const buzz = ms => { try { RM.vibrate(ms); } catch (e) {} try { navigator.vibrat
 
 const DEF = { teams: 'ctrl+shift+m', meet: 'ctrl+d', mute: 'win+alt+k', ptt: 'ctrl+space' };
 let MAP = Object.assign({}, DEF, store.get('rm_map', {}));
-let lastErr = '', S = {}, pttMode = store.get('rm_bt_ptt', 'teams'), talking = false, latched = false, flashT = null;
+let lastErr = '', S = {}, pttMode = store.get('rm_bt_ptt', 'teams'), talking = false, latched = false, flashT = null, beat = null;
 
 const pretty = c => c.split('+').join(' ');
 function log(t) { $('log').textContent = '> ' + t; }
@@ -295,6 +295,7 @@ function refresh() { try { S = JSON.parse(RM.status()); } catch (e) { S = { erro
 window.onNative = refresh;
 
 function send(id, combo, label) {
+  if (talking) { log('let go of push-to-talk first'); buzz([60, 60, 60]); return; }
   buzz(25); flash(id);
   if (!linked()) { log('not connected: pick a laptop below'); buzz([60, 60, 60]); return; }
   const r = RM.tap(combo);
@@ -325,12 +326,15 @@ function talkStart() {
   talking = true; ptt.classList.add('held'); buzz(20);
   $('pttLbl').innerHTML = 'transmitting<small>' + (latched ? 'locked · tap to stop' : 'release to mute') + '</small>';
   const r = pttMode === 'teams' ? RM.hold(MAP.ptt) : RM.tap(MAP.mute);
-  log(r === 'ok' ? (pttMode === 'teams' ? 'TX: holding ' + pretty(MAP.ptt) : 'TX: unmuted via ' + pretty(MAP.mute)) : 'bad shortcut: ' + r);
+  if (r !== 'ok') { talking = false; latched = false; ptt.classList.remove('held'); log('bad shortcut: ' + r); buzz([60, 60, 60]); return paint(); }
+  // Heartbeat: if this page freezes, the app lets go of the key by itself after 2.5 s.
+  if (pttMode === 'teams') beat = setInterval(() => RM.beat(), 700);
+  log(pttMode === 'teams' ? 'TX: holding ' + pretty(MAP.ptt) : 'TX: unmuted via ' + pretty(MAP.mute));
   paint();
 }
 function talkStop() {
   if (!talking) return;
-  talking = false; latched = false; ptt.classList.remove('held'); buzz(15);
+  talking = false; latched = false; ptt.classList.remove('held'); buzz(15); clearInterval(beat); beat = null;
   if (pttMode === 'teams') RM.release(); else RM.tap(MAP.mute);
   log('released: muted'); paint();
 }
@@ -339,6 +343,7 @@ ptt.addEventListener('pointerdown', e => { e.preventDefault(); if (latched) retu
 ptt.addEventListener('contextmenu', e => e.preventDefault());
 const toggleLock = () => { if (latched) return talkStop(); latched = true; if (talking) return paint(); talkStart(); };
 $('swLock').onclick = toggleLock; $('chipLock').onclick = toggleLock;
+window.onAppPause = () => talkStop();  // the app left the screen
 document.addEventListener('visibilitychange', () => { if (document.hidden) talkStop(); else refresh(); });
 
 // ---------- pairing & key map ----------

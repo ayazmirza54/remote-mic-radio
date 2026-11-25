@@ -10,6 +10,9 @@ import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothProfile;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -50,10 +53,13 @@ public class HidKeyboard {
     private BluetoothHidDevice hid;
     private BluetoothDevice host;      // connected computer
     private boolean registered;
+    private boolean proxyPending;      // getProfileProxy asked, answer not in yet
     private int connState = BluetoothProfile.STATE_DISCONNECTED;
     private boolean holding;
     private String error = "";
     private String lastSent = "";
+    private volatile long lastBeat;    // push-to-talk heartbeat from the page
+    private final Handler main = new Handler(Looper.getMainLooper());
 
     public HidKeyboard(Context ctx, Listener listener) {
         this.ctx = ctx.getApplicationContext();
@@ -67,9 +73,13 @@ public class HidKeyboard {
     public void start() {
         if (adapter == null) { error = "This phone has no Bluetooth."; changed(); return; }
         if (!adapter.isEnabled()) { error = "Turn Bluetooth on."; changed(); return; }
-        if (hid != null) return;
-        boolean ok = adapter.getProfileProxy(ctx, proxyListener, BluetoothProfile.HID_DEVICE);
-        if (!ok) { error = "This phone doesn't allow acting as a Bluetooth keyboard."; changed(); }
+        if (hid != null) {  // proxy alive but the keyboard got unregistered (another app, BT restart)
+            if (!registered) register();
+            return;
+        }
+        if (proxyPending) return;
+        proxyPending = adapter.getProfileProxy(ctx, proxyListener, BluetoothProfile.HID_DEVICE);
+        if (!proxyPending) { error = "This phone doesn't allow acting as a Bluetooth keyboard."; changed(); }
     }
 
     public void stop() {
@@ -78,24 +88,30 @@ public class HidKeyboard {
             try { hid.unregisterApp(); } catch (Exception ignored) {}
             if (adapter != null) adapter.closeProfileProxy(BluetoothProfile.HID_DEVICE, hid);
         }
-        hid = null; registered = false; host = null;
+        hid = null; registered = false; host = null; proxyPending = false;
         connState = BluetoothProfile.STATE_DISCONNECTED;
     }
 
     private final BluetoothProfile.ServiceListener proxyListener = new BluetoothProfile.ServiceListener() {
         @Override public void onServiceConnected(int profile, BluetoothProfile proxy) {
+            proxyPending = false;
             hid = (BluetoothHidDevice) proxy;
-            BluetoothHidDeviceAppSdpSettings sdp = new BluetoothHidDeviceAppSdpSettings(
-                    "Remote Mic", "Remote Mic keyboard", "rm-01",
-                    BluetoothHidDevice.SUBCLASS1_KEYBOARD, DESCRIPTOR);
-            boolean ok = hid.registerApp(sdp, null, null, io, callback);
-            if (!ok) error = "Bluetooth keyboard mode is busy (another keyboard app?).";
-            changed();
+            register();
         }
         @Override public void onServiceDisconnected(int profile) {
+            proxyPending = false;
             hid = null; registered = false; connState = BluetoothProfile.STATE_DISCONNECTED; changed();
         }
     };
+
+    private void register() {
+        BluetoothHidDeviceAppSdpSettings sdp = new BluetoothHidDeviceAppSdpSettings(
+                "Remote Mic", "Remote Mic keyboard", "rm-01",
+                BluetoothHidDevice.SUBCLASS1_KEYBOARD, DESCRIPTOR);
+        boolean ok = hid.registerApp(sdp, null, null, io, callback);
+        if (!ok) error = "Bluetooth keyboard mode is busy (another keyboard app?).";
+        changed();
+    }
 
     private final BluetoothHidDevice.Callback callback = new BluetoothHidDevice.Callback() {
         @Override public void onAppStatusChanged(BluetoothDevice plugged, boolean reg) {
@@ -149,10 +165,24 @@ public class HidKeyboard {
             if (k[0] != 0) { send(k[0], 0); sleep(25); }
             send(k[0], k[1]);
             holding = true;
+            lastBeat = SystemClock.elapsedRealtime();
             lastSent = combo + " (held)";
             changed();
+            main.postDelayed(watchdog, 500);
         });
     }
+
+    /** The page calls this every 0.7 s while talking. */
+    public void beat() { lastBeat = SystemClock.elapsedRealtime(); }
+
+    // Same safety as the Wi-Fi agent: no heartbeat for 2.5 s (page froze, app killed) -> let go.
+    private final Runnable watchdog = new Runnable() {
+        @Override public void run() {
+            if (!holding) return;
+            if (SystemClock.elapsedRealtime() - lastBeat > 2500) release();
+            else main.postDelayed(this, 500);
+        }
+    };
 
     public void release() {
         io.execute(this::releaseNow);
@@ -191,11 +221,22 @@ public class HidKeyboard {
             hid.connect(d);
             connState = BluetoothProfile.STATE_CONNECTING;
             changed();
+            main.removeCallbacks(connectTimeout);
+            main.postDelayed(connectTimeout, 12000);
         } catch (Exception e) {
             error = "Can't connect: " + e.getMessage();
             changed();
         }
     }
+
+    // Don't stay "LINKING…" forever when the laptop is off or out of range.
+    private final Runnable connectTimeout = () -> {
+        if (connState == BluetoothProfile.STATE_CONNECTING) {
+            connState = BluetoothProfile.STATE_DISCONNECTED;
+            error = "Laptop didn't answer. Is its Bluetooth on and in range? Tap it to retry.";
+            changed();
+        }
+    };
 
     public void disconnect() {
         if (hid != null && host != null) hid.disconnect(host);

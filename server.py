@@ -31,14 +31,17 @@ Usage
 
 import argparse
 import ctypes
+import hashlib
 import json
 import os
 import secrets
 import socket
+import subprocess
 import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -135,12 +138,13 @@ class WindowsBackend:
         H = ctypes.c_void_p
         for fn, args in {"SetForegroundWindow": [H], "BringWindowToTop": [H], "IsIconic": [H],
                          "ShowWindow": [H, ctypes.c_int], "IsWindowVisible": [H],
-                         "GetWindowTextLengthW": [H],
+                         "GetWindowTextLengthW": [H], "IsHungAppWindow": [H],
                          "GetWindowTextW": [H, ctypes.c_wchar_p, ctypes.c_int],
                          "GetWindowThreadProcessId": [H, ctypes.POINTER(ctypes.c_ulong)]}.items():
             getattr(self.u32, fn).argtypes = args
         self.u32.GetForegroundWindow.restype = H
         self._proc_cache = {}
+        self._names = {}               # device id -> friendly name (reading it is slow)
         self.mic_kill = False          # "mute all mics" switch
         self.sticky_apps = {}          # exe -> desired mute (bool)
         self.ptt = None                # active push-to-talk hold, if any
@@ -235,13 +239,15 @@ class WindowsBackend:
 
     def _focus(self, hwnd):
         u32 = self.u32
+        if u32.IsHungAppWindow(hwnd):  # focusing a frozen window can block us too
+            return False
         if u32.IsIconic(hwnd):
             u32.ShowWindow(hwnd, 9)  # SW_RESTORE
         fg = u32.GetForegroundWindow()
         cur_tid = self.k32.GetCurrentThreadId()
         fg_tid = u32.GetWindowThreadProcessId(fg, None)
         attached = False
-        if fg_tid and fg_tid != cur_tid:
+        if fg_tid and fg_tid != cur_tid and not u32.IsHungAppWindow(fg):
             attached = bool(u32.AttachThreadInput(cur_tid, fg_tid, True))
         u32.BringWindowToTop(hwnd)
         ok = u32.SetForegroundWindow(hwnd)
@@ -282,13 +288,15 @@ class WindowsBackend:
             time.sleep(0.02)
 
     def hotkey(self, app, target="auto", hwnd=None):
+        if self.ptt and self.ptt["mode"] == "teams":  # Ctrl is held down: a combo would break it
+            return {"ok": False, "error": "Let go of push-to-talk first."}
         w = self.find_target(app, target, hwnd)
         if not w:
             where = {"local": "locally", "rdp": "as an RDP window"}.get(target, "locally or via RDP")
             return {"ok": False, "error": f"No {app.title()} window found {where}."}
         prev = self.u32.GetForegroundWindow()
         if not self._focus(w["hwnd"]):
-            return {"ok": False, "error": f"Windows refused to focus '{w['title']}'."}
+            return {"ok": False, "error": f"'{w['title']}' is not responding or Windows refused to focus it."}
         time.sleep(0.12 if self.classify(w) == "rdp" else 0.05)
         self.send_combo(self.cfg["hotkeys"][app])
         if self.cfg.get("restore_focus") and prev and prev != w["hwnd"]:
@@ -311,7 +319,7 @@ class WindowsBackend:
                 return {"ok": False, "error": "No Teams or RDP window found for push-to-talk."}
             prev = self.u32.GetForegroundWindow()
             if not self._focus(w["hwnd"]):
-                return {"ok": False, "error": f"Windows refused to focus '{w['title']}'."}
+                return {"ok": False, "error": f"'{w['title']}' is not responding or Windows refused to focus it."}
             time.sleep(0.12 if self.classify(w) == "rdp" else 0.05)
             vks = [self._vk(k) for k in self.cfg["hotkeys"].get("teams_ptt", ["ctrl", "space"])]
             for vk in vks:  # press and HOLD
@@ -374,6 +382,12 @@ class WindowsBackend:
         return cast(dev.Activate(iface._iid_, self.CLSCTX_ALL, None), POINTER(iface))
 
     def _friendly(self, dev):
+        did = dev.GetId()
+        if did not in self._names:
+            self._names[did] = self._friendly_uncached(dev)
+        return self._names[did]
+
+    def _friendly_uncached(self, dev):
         try:
             from pycaw.pycaw import AudioUtilities
             d = AudioUtilities.CreateDevice(dev)
@@ -519,7 +533,8 @@ class MockBackend:
                 self.set_mic_all(False)
         res = {"ok": True, "mode": mode}
         if mode == "teams":
-            res.update(self.hotkey("teams", target, hwnd))
+            title = "client-vdi-01 - Remote Desktop Connection" if target == "rdp" else "Daily standup | Microsoft Teams"
+            res.update(sent_to=title, via="RDP" if target == "rdp" else "local")
         return res
 
     def ptt_beat(self):
@@ -550,6 +565,8 @@ class MockBackend:
             self.sticky_apps.pop(exe, None)
 
     def hotkey(self, app, target="auto", hwnd=None):
+        if self.ptt and self.ptt["mode"] == "teams":
+            return {"ok": False, "error": "Let go of push-to-talk first."}
         title = {"teams": "Daily standup | Microsoft Teams", "meet": "Meet - abc-defg-hij - Google Chrome"}[app]
         if target == "rdp":
             title = "client-vdi-01 - Remote Desktop Connection"
@@ -571,6 +588,81 @@ class MockBackend:
 
 
 # --------------------------------------------------------------------------------------
+# COM thread with self-healing
+# --------------------------------------------------------------------------------------
+class ComThread:
+    """All Core Audio / window calls run on one COM thread. If a call hangs (a stuck audio
+    driver, a frozen window), that thread is abandoned and a fresh one takes over, so the
+    agent never stays stuck."""
+
+    def __init__(self, backend):
+        self.backend = backend
+        self.lock = threading.Lock()
+        self._start()
+
+    def _start(self):
+        self.ex = ThreadPoolExecutor(max_workers=1, thread_name_prefix="com")
+        self.ex.submit(self.backend.com_init)
+
+    def run(self, fn, *a, timeout=8):
+        ex = self.ex
+        try:
+            return ex.submit(fn, *a).result(timeout=timeout)
+        except FuturesTimeout:
+            with self.lock:
+                if self.ex is ex:
+                    print("[com] a call hung; starting a fresh COM thread")
+                    ex.shutdown(wait=False, cancel_futures=True)
+                    self._start()
+            raise TimeoutError("The laptop was busy. Try again.") from None
+
+
+def agent_tag(token):
+    """Public fingerprint of the token: lets the phone app recognise its laptop without leaking the token."""
+    return hashlib.sha256(token.encode()).hexdigest()[:12]
+
+
+def discovery(port, token):
+    """Answer 'RMDISCOVER' on UDP so the phone app can find this laptop after its IP changes."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.bind(("", port))
+    except OSError as e:
+        print(f"[discovery] off: {e}")
+        return
+    reply = f"RMAGENT {port} {agent_tag(token)}".encode()
+    while True:
+        try:
+            data, addr = s.recvfrom(64)
+            if data.startswith(b"RMDISCOVER"):
+                s.sendto(reply, addr)
+        except OSError:
+            time.sleep(1)
+
+
+def network_is_public():
+    """Windows Firewall blocks phones on 'Public' networks by default."""
+    if sys.platform != "win32":
+        return False
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command",
+                              "(Get-NetConnectionProfile).NetworkCategory -join ','"],
+                             capture_output=True, text=True, timeout=6, creationflags=0x08000000).stdout
+        return "Public" in out
+    except Exception:
+        return False
+
+
+def allow_firewall():
+    """One UAC prompt: allow this program on every network profile (TCP for the page, UDP for discovery)."""
+    if sys.platform != "win32":
+        return False
+    args = (f'advfirewall firewall add rule name="Remote Mic" dir=in action=allow '
+            f'program="{sys.executable}" enable=yes profile=any')
+    return ctypes.windll.shell32.ShellExecuteW(None, "runas", "netsh", args, None, 0) > 32
+
+
+# --------------------------------------------------------------------------------------
 # HTTP layer
 # --------------------------------------------------------------------------------------
 MIME = {".html": "text/html; charset=utf-8", ".js": "application/javascript", ".css": "text/css",
@@ -589,19 +681,23 @@ def pair_page(cfg, port):
     except Exception:
         qr = "<p>(QR needs the qrcode package; type the link instead)</p>"
     links = "".join(f"<li><code>{u}</code></li>" for u in urls)
+    warn = ("<p class='warn'><b>Your Wi-Fi is set to Public</b>, so Windows Firewall blocks your phone.</p>"
+            if network_is_public() else "")
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Remote Mic: pair your phone</title>
 <style>body{{font:15px/1.6 Consolas,monospace;background:#e6e5e1;color:#141414;display:flex;justify-content:center;padding:40px}}
 .card{{background:#f4f3f0;border-radius:24px;padding:32px;max-width:560px;box-shadow:0 20px 40px rgba(0,0,0,.15)}}
 h1{{margin:0 0 6px;font-size:22px}} .qr{{background:#fff;border-radius:16px;padding:12px;width:300px}} .qr svg{{width:100%;height:auto}}
 button{{font:inherit;border:none;border-radius:10px;padding:10px 16px;cursor:pointer;margin-right:8px}}
-.org{{background:#ff5b1f;color:#1a0a03}} .gph{{background:#2b2b2b;color:#fff}} small{{color:#77766f}}</style></head>
+.org{{background:#ff5b1f;color:#1a0a03}} .gph{{background:#2b2b2b;color:#fff}} small{{color:#77766f}} .warn{{color:#b3261e}}</style></head>
 <body><div class="card"><h1>rm-01 · pair your phone</h1><small>Scan with your phone camera (same Wi-Fi), then Add to Home screen.</small>
 <div class="qr">{qr}</div><ul>{links}</ul>
 <p><label><input type="checkbox" id="as"> Start with Windows (runs quietly at login)</label></p>
+{warn}<p><button class="org" id="fw">Allow through firewall</button> <small id="fwm">Phone can't connect? Click once (asks for admin).</small></p>
 <button class="gph" onclick="fetch('/local/quit',{{method:'POST'}}).then(()=>document.body.innerHTML='<p>Agent stopped. Close this tab.</p>')">Quit agent</button>
 <small>Open this page again any time: run RemoteMic again.</small></div>
 <script>const a=document.getElementById('as');fetch('/local/autostart').then(r=>r.json()).then(j=>a.checked=j.enabled);
-a.onchange=()=>fetch('/local/autostart',{{method:'POST',body:JSON.stringify({{enabled:a.checked}})}}).then(r=>r.json()).then(j=>a.checked=j.enabled);</script>
+a.onchange=()=>fetch('/local/autostart',{{method:'POST',body:JSON.stringify({{enabled:a.checked}})}}).then(r=>r.json()).then(j=>a.checked=j.enabled);
+document.getElementById('fw').onclick=()=>fetch('/local/firewall',{{method:'POST'}}).then(r=>r.json()).then(j=>document.getElementById('fwm').textContent=j.ok?'Done once you approve the Windows prompt. Reload the page on your phone.':'Could not start the firewall prompt.');</script>
 </body></html>"""
 
 
@@ -610,7 +706,15 @@ def make_handler(backend, cfg, com, ctl):
     log = {"last": None}
 
     def run(fn, *a):
-        return com.submit(fn, *a).result(timeout=10)
+        return com.run(fn, *a)
+
+    def act(fn, *a):
+        """Run an action, then refresh the cached status so the phone sees the result at once."""
+        def job():
+            res = fn(*a)
+            ctl["refresh"]()
+            return res
+        return com.run(job)
 
     class H(BaseHTTPRequestHandler):
         server_version = "RemoteMic/1.0"
@@ -644,9 +748,12 @@ def make_handler(backend, cfg, com, ctl):
             if path.startswith("/api/"):
                 if not self._authed():
                     return self._send(401, {"ok": False, "error": "bad token"})
-                if path == "/api/status":
-                    st = run(backend.status)
+                if path == "/api/status":  # served from cache: never waits on Windows
+                    if not ctl["status"]:
+                        return self._send(503, {"ok": False, "error": "starting"})
+                    st = dict(ctl["status"])
                     st["last"] = log["last"]
+                    st["stale"] = time.time() - ctl["status_at"] > 5
                     return self._send(200, st)
                 return self._send(404, {"ok": False})
             if path == "/":
@@ -666,6 +773,8 @@ def make_handler(backend, cfg, com, ctl):
                 body = json.loads(self.rfile.read(n) or b"{}")
                 if path == "/local/autostart":
                     return self._send(200, {"enabled": autostart(bool(body.get("enabled")))})
+                if path == "/local/firewall":
+                    return self._send(200, {"ok": allow_firewall()})
                 if path == "/local/quit":
                     self._send(200, {"ok": True})
                     threading.Thread(target=ctl["httpd"].shutdown, daemon=True).start()
@@ -681,14 +790,14 @@ def make_handler(backend, cfg, com, ctl):
             path = urlparse(self.path).path
             try:
                 if path == "/api/mic":  # {"muted": true|false}  -> all mics
-                    run(backend.set_mic_all, bool(body.get("muted")))
+                    act(backend.set_mic_all, bool(body.get("muted")))
                     res = {"ok": True}
                     log["last"] = ("Mic muted" if body.get("muted") else "Mic live")
                 elif path == "/api/device":  # {"id":..., "muted":...}
-                    run(backend.set_device, body["id"], bool(body.get("muted")))
+                    act(backend.set_device, body["id"], bool(body.get("muted")))
                     res = {"ok": True}
                 elif path == "/api/app":  # {"exe":..., "muted":...}
-                    run(backend.set_app, body["exe"], bool(body.get("muted")))
+                    act(backend.set_app, body["exe"], bool(body.get("muted")))
                     res = {"ok": True}
                     log["last"] = f"{body['exe']} {'muted' if body.get('muted') else 'unmuted'}"
                 elif path == "/api/hotkey":  # {"app":"teams|meet","target":"auto|local|rdp|hwnd","hwnd":..}
@@ -704,18 +813,20 @@ def make_handler(backend, cfg, com, ctl):
                         mode = body.get("mode", "mic")
                         if mode not in ("mic", "teams"):
                             return self._send(400, {"ok": False, "error": "unknown mode"})
-                        res = run(backend.ptt_down, mode, body.get("target", "auto"), body.get("hwnd"))
+                        res = act(backend.ptt_down, mode, body.get("target", "auto"), body.get("hwnd"))
                         if res.get("ok"):
                             log["last"] = f"Push-to-talk ({mode}) - talking"
                     elif action == "beat":
-                        res = run(backend.ptt_beat)
+                        res = backend.ptt_beat()  # just a timestamp: never queue behind Windows calls
                     elif action == "up":
-                        res = run(backend.ptt_up)
+                        res = act(backend.ptt_up)
                         log["last"] = "Push-to-talk released"
                     else:
                         return self._send(400, {"ok": False, "error": "bad action"})
                 else:
                     return self._send(404, {"ok": False})
+            except TimeoutError as e:
+                res = {"ok": False, "error": str(e)}
             except Exception as e:
                 res = {"ok": False, "error": f"{type(e).__name__}: {e}"}
             self._send(200, res)
@@ -780,22 +891,39 @@ def main():
     else:
         backend = WindowsBackend(cfg)
 
-    com = ThreadPoolExecutor(max_workers=1, thread_name_prefix="com")
-    com.submit(backend.com_init).result()
-    if cfg.get("mute_on_start"):
-        com.submit(backend.set_mic_all, True).result()
+    com = ComThread(backend)
+    ctl = {"port": port, "httpd": None, "status": None, "status_at": 0.0}
 
-    def ticker():
+    def refresh():  # runs on the COM thread
+        try:
+            ctl["status"] = backend.status()
+            ctl["status_at"] = time.time()
+        except Exception as e:
+            print(f"[status] {e}")
+
+    def tick():
+        backend.tick()
+        refresh()
+
+    ctl["refresh"] = refresh
+    try:
+        if cfg.get("mute_on_start"):
+            com.run(backend.set_mic_all, True)
+        com.run(refresh, timeout=20)
+    except TimeoutError as e:
+        print(f"[start] {e}")
+
+    def ticker():  # one tick at a time; a hung tick gets its thread replaced by ComThread
         while True:
             time.sleep(1.0)
             try:
-                com.submit(backend.tick).result(timeout=5)
+                com.run(tick, timeout=10)
             except Exception as e:
                 print(f"[tick] {e}")
 
     threading.Thread(target=ticker, daemon=True).start()
+    threading.Thread(target=discovery, args=(port, cfg["token"]), daemon=True).start()
 
-    ctl = {"port": port, "httpd": None}
     httpd = ThreadingHTTPServer(("0.0.0.0", port), make_handler(backend, cfg, com, ctl))
     ctl["httpd"] = httpd
     urls = phone_urls(cfg, port)
@@ -818,6 +946,7 @@ def main():
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
+    os._exit(0)  # don't wait on an abandoned (hung) COM thread
 
 
 if __name__ == "__main__":

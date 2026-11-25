@@ -261,16 +261,21 @@ function mock(path, b) {
   }
   return new Promise(res => setTimeout(() => res(JSON.parse(JSON.stringify(r))), 60));
 }
-async function api(path, body) {
+// Every call has a deadline: a stuck request must never block the next button press.
+async function api(path, body, ms = 9000) {
   if (DEMO) return mock(path, body || {});
-  const r = await fetch(path, { method: body ? 'POST' : 'GET', headers: { 'X-Token': TOKEN, 'Content-Type': 'application/json' },
-                                body: body ? JSON.stringify(body) : undefined });
-  if (r.status === 401) { $('lockScr').style.display = 'flex'; throw new Error('bad token'); }
-  return r.json();
+  const ac = new AbortController(), t = setTimeout(() => ac.abort(), ms);
+  try {
+    const r = await fetch(path, { method: body ? 'POST' : 'GET', signal: ac.signal, cache: 'no-store',
+                                  headers: { 'X-Token': TOKEN, 'Content-Type': 'application/json' },
+                                  body: body ? JSON.stringify(body) : undefined });
+    if (r.status === 401) { $('lockScr').style.display = 'flex'; throw new Error('bad token'); }
+    return await r.json();
+  } finally { clearTimeout(t); }
 }
 
 // ---------- state ----------
-let S = null, online = false, chIdx = store.get('rm_ch', 0), pttMode = store.get('rm_ptt_mode', 'mic');
+let S = null, online = false, polling = false, fails = 0, relinkAt = 0, chIdx = store.get('rm_ch', 0), pttMode = store.get('rm_ptt_mode', 'mic');
 let talking = false, latched = false, beat = null;
 const BASE = [{ code: 'AUTO', kind: 'AUTO TARGET', target: 'auto' }, { code: 'LOCL', kind: 'THIS LAPTOP', target: 'local' }, { code: 'RDP', kind: 'REMOTE DESKTOP', target: 'rdp' }];
 const channels = () => BASE.concat((S ? S.targets : []).map(t => ({ code: t.kind === 'rdp' ? 'RDP' : t.kind === 'teams' ? 'TMS' : 'MEET', kind: 'PINNED ' + t.kind.toUpperCase(), target: 'hwnd', hwnd: t.hwnd, title: t.title })));
@@ -284,7 +289,7 @@ function paint() {
   $('chKind').textContent = c.kind;
   const auto = S && S.targets.find(t => c.target === 'rdp' ? t.kind === 'rdp' : c.target === 'local' ? t.kind === 'teams' : t.kind === 'teams' || t.kind === 'rdp');
   $('chTitle').textContent = c.title || (auto ? auto.title : 'no window');
-  $('conn').textContent = DEMO ? 'DEMO' : online ? 'CONNECTED' : 'NO SIGNAL';
+  $('conn').textContent = DEMO ? 'DEMO' : !online ? 'NO SIGNAL' : S && S.stale ? 'LAPTOP BUSY' : 'CONNECTED';
   $('bars').className = 'bars' + (online || DEMO ? '' : ' off');
   const live = S && !S.all_muted;
   const st = $('state');
@@ -320,14 +325,26 @@ function renderLists() {
 }
 
 async function refresh() {
-  try { S = await api('/api/status'); online = true; if (S.ptt && !talking) S.ptt = S.ptt; }
-  catch (e) { online = false; }
+  if (polling) return;  // one status call at a time
+  polling = true;
+  try {
+    const st = await api('/api/status', null, 4000);
+    if (st && st.devices) { S = st; online = true; fails = 0; }
+  } catch (e) {
+    if (++fails === 3) log('laptop not reachable: same Wi-Fi? RemoteMic.exe running?');
+    if (fails >= 3) {
+      online = false;
+      // In the app: the laptop may have a new IP (sleep, new Wi-Fi). The app can find it again.
+      if (window.RM && window.RM.relink && Date.now() - relinkAt > 15000) { relinkAt = Date.now(); window.RM.relink(); }
+    }
+  } finally { polling = false; }
   paint(); renderLists();
 }
 
 // ---------- keys ----------
 function press(el) { el.classList.add('press'); setTimeout(() => el.classList.remove('press'), 120); }
 async function hotkey(app) {
+  if (talking) { log('let go of push-to-talk first'); buzz([60, 60, 60]); return; }
   buzz(25); log('sending ' + (app === 'teams' ? 'Ctrl+Shift+M' : 'Ctrl+D') + '…');
   try { const r = await api('/api/hotkey', Object.assign({ app }, tgt()));
     r.ok ? log(`${app.toUpperCase()} toggled → ${r.sent_to} [${r.via}]`) : (log('ERR ' + r.error), buzz([60, 60, 60]));
@@ -365,7 +382,7 @@ async function talkStart() {
   if (talking) return;
   talking = true; ptt.classList.add('held'); buzz(20);
   $('pttLbl').innerHTML = 'transmitting<small>' + (latched ? 'locked · tap to stop' : 'release to mute') + '</small>'; paint();
-  beat = setInterval(() => api('/api/ptt', { action: 'beat' }).catch(() => {}), 700);
+  beat = setInterval(() => api('/api/ptt', { action: 'beat' }, 1500).catch(() => {}), 700);
   try { const r = await api('/api/ptt', Object.assign({ action: 'down', mode: pttMode }, tgt()));
     if (!r.ok) { log('ERR ' + r.error); buzz([60, 60, 60]); return talkStop(true); }
     refresh();
@@ -385,6 +402,7 @@ ptt.addEventListener('keydown', e => { if ((e.key === ' ' || e.key === 'Enter') 
 ptt.addEventListener('keyup', e => { if ((e.key === ' ' || e.key === 'Enter') && !latched) talkStop(); });
 const toggleLock = () => { if (latched) return talkStop(); if (talking) { latched = true; paint(); return; } latched = true; talkStart(); log('TX locked. Tap the grille to stop.'); };
 $('swLock').onclick = toggleLock; $('chipLock').onclick = toggleLock;
+window.onAppPause = () => { if (talking) talkStop(true); };  // called by the Android app when it leaves the screen
 document.addEventListener('visibilitychange', () => { if (document.hidden && talking) talkStop(true); else if (!document.hidden) refresh(); });
 window.addEventListener('pagehide', () => { if (talking && !DEMO) fetch('/api/ptt', { method: 'POST', keepalive: true, headers: { 'X-Token': TOKEN, 'Content-Type': 'application/json' }, body: '{"action":"up"}' }); });
 

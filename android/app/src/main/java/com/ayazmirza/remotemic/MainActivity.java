@@ -13,6 +13,7 @@ import android.net.Uri;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.SystemClock;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.view.View;
@@ -25,8 +26,20 @@ import android.webkit.WebViewClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.InterfaceAddress;
+import java.net.NetworkInterface;
+import java.net.SocketTimeoutException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /** Hosts the walkie-talkie UI (assets/index.html) and bridges its buttons to the Bluetooth keyboard. */
 public class MainActivity extends Activity {
@@ -41,6 +54,7 @@ public class MainActivity extends Activity {
     private SharedPreferences prefs;
     // True only while our own Bluetooth page is shown: the laptop's page may not drive the BT keyboard.
     private volatile boolean onHome = true;
+    private volatile long findAt;      // last time we searched for a moved laptop
 
     @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
     @Override
@@ -71,8 +85,8 @@ public class MainActivity extends Activity {
             }
 
             @Override public void onReceivedError(WebView v, WebResourceRequest r, WebResourceError e) {
-                // Laptop agent unreachable: fall back to the Bluetooth page, which says so.
-                if (r.isForMainFrame() && !"file".equals(r.getUrl().getScheme())) v.loadUrl(HOME + "#wifi-down");
+                // Laptop unreachable: look for it on the network (new IP?), else fall back to Bluetooth.
+                if (r.isForMainFrame() && !"file".equals(r.getUrl().getScheme())) relink(true);
             }
         });
         if (!handleLink(getIntent())) loadHome();
@@ -80,6 +94,80 @@ public class MainActivity extends Activity {
 
         registerReceiver(btReceiver, new IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED));
         ensurePermissionsThenStart();
+    }
+
+    /** Find the laptop again after its IP changed. fallback: show the Bluetooth page if it isn't found. */
+    private void relink(boolean fallback) {
+        long now = SystemClock.elapsedRealtime();
+        String agent = prefs.getString("agent", null);
+        if (agent == null || now - findAt < 10000) {
+            if (fallback) web.loadUrl(HOME + "#wifi-down");
+            return;
+        }
+        findAt = now;
+        new Thread(() -> {
+            String found = discover(agent);
+            runOnUiThread(() -> {
+                if (found != null) {
+                    prefs.edit().putString("agent", found).apply();
+                    web.loadUrl(found);
+                } else if (fallback) {
+                    web.loadUrl(HOME + "#wifi-down");
+                }
+            });
+        }).start();
+    }
+
+    /** Ask RemoteMic.exe where it is (UDP). It answers with a fingerprint of the token, never the token. */
+    static String discover(String agent) {
+        Uri a = Uri.parse(agent);
+        String token = a.getQueryParameter("t");
+        int port = a.getPort() > 0 ? a.getPort() : 8765;
+        String tag = sha256(token).substring(0, 12);
+        try (DatagramSocket s = new DatagramSocket()) {
+            s.setBroadcast(true);
+            s.setSoTimeout(500);
+            Set<String> nets = new LinkedHashSet<>();  // "a.b.c." prefixes: old laptop subnet + this phone's subnets
+            String[] h = String.valueOf(a.getHost()).split("\\.");
+            if (h.length == 4) nets.add(h[0] + "." + h[1] + "." + h[2] + ".");
+            List<InetAddress> dst = new ArrayList<>();
+            dst.add(InetAddress.getByName("255.255.255.255"));
+            for (NetworkInterface ni : Collections.list(NetworkInterface.getNetworkInterfaces())) {
+                if (!ni.isUp() || ni.isLoopback()) continue;
+                for (InterfaceAddress ia : ni.getInterfaceAddresses()) {
+                    if (!(ia.getAddress() instanceof Inet4Address)) continue;
+                    if (ia.getBroadcast() != null) dst.add(ia.getBroadcast());
+                    String ip = ia.getAddress().getHostAddress();
+                    nets.add(ip.substring(0, ip.lastIndexOf('.') + 1));
+                }
+            }
+            // shortcut: probes every host of each /24, fine for home and office Wi-Fi; wider subnets rely on broadcast.
+            for (String n : nets) for (int i = 1; i < 255; i++) dst.add(InetAddress.getByName(n + i));
+            byte[] q = "RMDISCOVER".getBytes(StandardCharsets.US_ASCII);
+            byte[] buf = new byte[128];
+            for (int round = 0; round < 3; round++) {
+                for (InetAddress d : dst) {
+                    try { s.send(new DatagramPacket(q, q.length, d, port)); } catch (Exception ignored) {}
+                }
+                while (true) {
+                    DatagramPacket r = new DatagramPacket(buf, buf.length);
+                    try { s.receive(r); } catch (SocketTimeoutException e) { break; }
+                    String[] m = new String(r.getData(), 0, r.getLength(), StandardCharsets.US_ASCII).split(" ");
+                    if (m.length == 3 && m[0].equals("RMAGENT") && m[2].equals(tag)) {
+                        return "http://" + r.getAddress().getHostAddress() + ":" + m[1] + "/?t=" + Uri.encode(token);
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    static String sha256(String s) {
+        try {
+            StringBuilder b = new StringBuilder();
+            for (byte x : MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8))) b.append(String.format("%02x", x));
+            return b.toString();
+        } catch (Exception e) { throw new RuntimeException(e); }
     }
 
     private void loadHome() {
@@ -166,11 +254,24 @@ public class MainActivity extends Activity {
         }
     };
 
-    /** Safety: leaving the app always lets go of any held push-to-talk key. */
+    /** Safety: leaving the app always lets go of push-to-talk (BT key, or the laptop's mic in Wi-Fi mode). */
     @Override
     protected void onPause() {
         super.onPause();
+        web.evaluateJavascript("window.onAppPause && window.onAppPause()", null);
         kb.release();
+    }
+
+    /** Back in the app: bring the Bluetooth keyboard back if Android dropped it. Never prompts here. */
+    @Override
+    protected void onResume() {
+        super.onResume();
+        boolean perms = Build.VERSION.SDK_INT < Build.VERSION_CODES.S
+                || (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+                    && checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED);
+        BluetoothAdapter a = BluetoothAdapter.getDefaultAdapter();
+        if (perms && a != null && a.isEnabled()) kb.start();
+        pushState();
     }
 
     @Override
@@ -191,6 +292,9 @@ public class MainActivity extends Activity {
         @JavascriptInterface public String tap(String combo) { return onHome ? guard(() -> kb.tap(combo)) : "not allowed"; }
         @JavascriptInterface public String hold(String combo) { return onHome ? guard(() -> kb.hold(combo)) : "not allowed"; }
         @JavascriptInterface public void release() { kb.release(); }
+        @JavascriptInterface public void beat() { kb.beat(); }
+        /** The laptop's page lost contact: look for the laptop again (new IP). */
+        @JavascriptInterface public void relink() { runOnUiThread(() -> MainActivity.this.relink(false)); }
         @JavascriptInterface public void connect(String address) { if (onHome) kb.connect(address); }
 
         /** Wi-Fi mode: the saved laptop agent link ("" if none). */

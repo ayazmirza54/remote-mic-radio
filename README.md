@@ -60,6 +60,12 @@ Notes:
 
 **Target switch:** *Auto* sends to whichever Teams or RDP window you used most recently. *This laptop* and *RDP* force one or the other.
 
+## If something stops working
+- **Phone can't connect at all:** on the laptop's pairing page, click **Allow through firewall** once. Windows blocks phones on Wi-Fi it treats as "Public", and the page warns you when that's the case.
+- **Laptop slept or changed Wi-Fi:** the app finds it again by itself. In a phone browser, scan the QR code again, because the laptop's address may have changed.
+- **The laptop gets stuck** (a frozen Teams window, a slow audio driver): the agent drops that call within about 8 s and carries on. The phone shows **LAPTOP BUSY** meanwhile instead of freezing.
+- **Bluetooth dropped:** reopen the app. It re-registers the keyboard and reconnects. Linking gives up after 12 s instead of hanging.
+
 ## Push-to-talk safety
 While you're talking, the phone checks in with the laptop every 0.7 s. If those check-ins stop for 2.5 s (screen locked, app closed, Wi-Fi dropped), the laptop mutes you again on its own, so you never get stuck with an open mic. Change the 2.5 s with `ptt_timeout_sec` in `config.json`. Leaving or hiding the page also releases straight away.
 
