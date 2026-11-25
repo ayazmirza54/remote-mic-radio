@@ -11,6 +11,12 @@ There are two ways to use it. Neither needs you to run `server.py` by hand.
 | Mute the mic hardware / one app (e.g. only RDP) | ❌ a keyboard can't do this | ✅ |
 | Works when office Wi-Fi blocks phones | ✅ | ❌ (use your hotspot) |
 
+## How the three pieces fit together
+- **RemoteMic.exe** runs on the laptop and serves the remote page (the web app) on your Wi-Fi. Its pairing page shows a QR code.
+- **Phone browser:** scan the QR code to get the web app with full control. On Android, tap **open in the Remote Mic app** to hand the link to the app.
+- **RemoteMic.apk** has two modes with the same keys and flow. **Bluetooth** needs no laptop software. **Wi-Fi** opens the same web app from RemoteMic.exe inside the app. Switch with **⇄ switch to bluetooth mode** at the bottom of the Wi-Fi page, or under **wi-fi agent** on the Bluetooth page, where you can also paste the agent link. If the laptop can't be reached, the app falls back to Bluetooth and says so.
+- **Hosted page** (Vercel): a demo of the web app with download links. A browser can't reach your laptop from an https site, so the real controls always come from RemoteMic.exe.
+
 ## Get the builds (one time, about 5 minutes)
 1. Create an empty GitHub repo (e.g. `remote-mic`) and push this folder to it.
 2. Open the repo's **Actions** tab. The `build` workflow makes both `RemoteMic.apk` and `RemoteMic.exe`.

@@ -121,7 +121,8 @@ body{padding:max(18px,env(safe-area-inset-top)) 16px calc(28px + env(safe-area-i
 .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:-1px}
 .empty{color:var(--mut);font-size:12px;padding:12px 0}
 .note{color:var(--mut);font-size:11.5px;line-height:1.55;padding:2px 0 12px}
-.demo{margin-top:16px;text-align:center;color:var(--mut);font-size:11.5px}
+.demo{margin-top:16px;text-align:center;color:var(--mut);font-size:11.5px;line-height:1.7}
+.demo a,.lock a{color:var(--org);font-weight:700}
 .lock{position:fixed;inset:0;background:var(--page);display:none;align-items:center;justify-content:center;padding:30px;text-align:center;line-height:1.7;color:var(--mut);z-index:9}
 .lock b{color:var(--org)}
 @media (prefers-reduced-motion:reduce){.l-state.blink{animation:none}}
@@ -196,7 +197,11 @@ body{padding:max(18px,env(safe-area-inset-top)) 16px calc(28px + env(safe-area-i
     <div class="note" style="padding-top:10px">CH 01–03 are Auto, This laptop and RDP. Every Teams, Meet or RDP window open on the laptop gets its own channel after those.</div>
     <div id="chans"></div>
   </details>
-  <div class="demo" id="demoNote" hidden>Demo mode. Nothing is connected. Run <b>server.py</b> on your laptop and open its link to control the real mic.</div>
+  <div class="demo" id="demoNote" hidden>Demo mode. Nothing is connected.<br>
+    Laptop: <a href="https://github.com/ayazmirza54/remote-mic-radio/releases/latest/download/RemoteMic.exe">RemoteMic.exe</a> (Wi-Fi, full control) ·
+    Phone: <a href="https://github.com/ayazmirza54/remote-mic-radio/releases/latest/download/RemoteMic.apk">RemoteMic.apk</a> (Bluetooth + Wi-Fi).<br>
+    Run the .exe, then scan its QR code with your phone.</div>
+  <div class="demo" id="appNote" hidden></div>
 </div>
 
 <div class="lock" id="lockScr"><div><b>not paired</b><br>Open the link printed by server.py on your laptop (it ends with <b>?t=…</b>) or scan its QR code.</div></div>
@@ -215,6 +220,19 @@ if (qs.get('t')) store.set('rm_token', qs.get('t'));
 const TOKEN = qs.get('t') || store.get('rm_token', null);
 if (!DEMO && !TOKEN) $('lockScr').style.display = 'flex';
 if (DEMO) $('demoNote').hidden = false;
+
+// ---------- link with the Android app (same page; the app adds Bluetooth mode) ----------
+if (window.RM && window.RM.useBluetooth) {
+  const h = '<a href="#" data-bt>⇄ switch to bluetooth mode</a>';
+  $('appNote').innerHTML = h; $('appNote').hidden = false;
+  $('lockScr').firstElementChild.insertAdjacentHTML('beforeend', '<br><br>' + h);
+  document.addEventListener('click', e => { if (e.target.closest('[data-bt]')) { e.preventDefault(); window.RM.useBluetooth(); } });
+} else if (!DEMO && TOKEN && /Android/i.test(navigator.userAgent)) {
+  const u = encodeURIComponent(location.origin + '/?t=' + TOKEN);
+  const apk = encodeURIComponent('https://github.com/ayazmirza54/remote-mic-radio/releases/latest/download/RemoteMic.apk');
+  $('appNote').innerHTML = `<a href="intent://connect?u=${u}#Intent;scheme=remotemic;package=com.ayazmirza.remotemic;S.browser_fallback_url=${apk};end">open in the Remote Mic app</a> · adds Bluetooth mode`;
+  $('appNote').hidden = false;
+}
 
 // ---------- demo backend (same shape as server.py --mock) ----------
 const M = { kill: false, ptt: null, last: null,

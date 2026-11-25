@@ -201,6 +201,12 @@ body{padding:max(18px,env(safe-area-inset-top)) 16px calc(28px + env(safe-area-i
       <li>Windows adds it as a keyboard. It shows here and reconnects from now on.</li>
     </ol>
   </details>
+  <details class="drawer" id="dWifi">
+    <summary><span>wi-fi agent</span><b>RemoteMic.exe</b></summary>
+    <div class="note" style="padding-top:12px">For full control (mute the mic hardware, one app, or only RDP), run <b>RemoteMic.exe</b> on the laptop. Scan its QR code with the phone camera and tap <b>open in app</b>, or paste its link here. Same keys, same flow.</div>
+    <div class="kv"><label for="wUrl">agent link</label><input id="wUrl" type="url" autocomplete="off" spellcheck="false" placeholder="http://192.168.1.5:8765/?t=…"></div>
+    <div class="btns"><button class="btn org" id="bWifi">connect over wi-fi</button></div>
+  </details>
   <details class="drawer">
     <summary><span>key map</span><b>edit shortcuts</b></summary>
     <div class="kv">
@@ -240,7 +246,8 @@ const RM = window.RM || {
                                  phone: 'Pixel', host: fake.host, hosts: fake.hosts, preferred: fake.host.address }),
   tap: c => { fake.last = c; return 'ok'; }, hold: c => { fake.last = c + ' (held)'; return 'ok'; }, release() {},
   connect: a => { fake.host = fake.hosts.find(h => h.address === a); setTimeout(() => window.onNative(), 300); },
-  disconnect() {}, retry() {}, discoverable() {}, openBluetoothSettings() {}, vibrate() {}
+  disconnect() {}, retry() {}, discoverable() {}, openBluetoothSettings() {}, vibrate() {},
+  agent: () => '', useWifi: () => 'Preview only: install the APK.', useBluetooth() {}
 };
 if (DEMO) $('demoNote').hidden = false;
 const buzz = ms => { try { RM.vibrate(ms); } catch (e) {} try { navigator.vibrate && navigator.vibrate(ms); } catch (e) {} };
@@ -348,7 +355,12 @@ $('bSaveMap').onclick = () => {
 };
 $('bResetMap').onclick = () => { MAP = Object.assign({}, DEF); store.set('rm_map', {}); fillMap(); paint(); log('defaults restored'); };
 
+// ---------- wi-fi agent (RemoteMic.exe): the app opens the laptop's own page ----------
+$('wUrl').value = RM.agent();
+$('bWifi').onclick = () => { const r = RM.useWifi($('wUrl').value); if (r !== 'ok') { log(r); buzz([60, 60, 60]); } };
+
 fillMap(); refresh();
+if (location.hash === '#wifi-down') { $('dWifi').open = true; log('laptop agent unreachable: is RemoteMic.exe running on the same Wi-Fi?'); }
 setInterval(() => { if (!document.hidden) refresh(); }, 2000);
 }
 </script>
