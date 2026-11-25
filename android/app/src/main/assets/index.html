@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#e6e5e1">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Remote Mic BT</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=VT323&family=IBM+Plex+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* VOICE: precise little instrument; tiny printed labels, nothing decorative that doesn't do a job
+   IDEA: a pocket transceiver in milled aluminium: channel = call window, grille = the mic
+   PICTURE: the device itself: screws, a calculator-style LCD, colour-capped square keys, perforated grille
+   COLOUR/TYPE: aluminium grey body, white/graphite/orange caps, a grey-green reflective calculator LCD with dark segments; VT323 screen, IBM Plex Mono print
+   LAYOUT: one centred device, then flat spec-sheet drawers for apps, mics and channels */
+:root{color-scheme:light dark;--page:light-dark(#e6e5e1,#101010);--ink:light-dark(#141414,#e9e8e4);--mut:light-dark(#77766f,#8c8b85);--card:light-dark(#f4f3f0,#1a1a1a);--line:light-dark(#d2d1cb,#2a2a2a);
+  --alu1:#dcdcd7;--alu2:#c3c3be;--print:#4a4a46;--org:#ff5b1f;--org2:#ff7a45;--gph:#2b2b2b;--wht:#f7f7f4;--gry:#9d9d98;
+  --p:#1f2419;--pg:transparent;--oled:#bcc4a6;--lcd1:#c9d0b5;--lcd2:#aab396;--live:#ecece8;--mono:'IBM Plex Mono',ui-monospace,Consolas,monospace;--vt:'VT323','IBM Plex Mono',monospace}
+:root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
+*{box-sizing:border-box;min-width:0;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--page);color:var(--ink);font:14px/1.5 var(--mono)}
+body{padding:max(18px,env(safe-area-inset-top)) 16px calc(28px + env(safe-area-inset-bottom));user-select:none;overflow-x:clip}
+.wrap{max-width:420px;margin:0 auto}
+/* ---- body ---- */
+.radio{position:relative;margin-top:40px;border-radius:30px;padding:26px 22px 22px;
+  background:linear-gradient(175deg,#e9e9e5 0%,var(--alu1) 18%,var(--alu2) 100%);
+  box-shadow:inset 0 1px 0 #fff,inset 0 -2px 0 rgba(0,0,0,.12),0 1px 0 #9a9a95,0 24px 50px rgba(0,0,0,.22),0 4px 10px rgba(0,0,0,.12)}
+.radio:before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;opacity:.5;
+  background:repeating-linear-gradient(90deg,rgba(255,255,255,.18) 0 1px,transparent 1px 3px)}
+.screw{position:absolute;width:11px;height:11px;border-radius:50%;background:radial-gradient(circle at 35% 35%,#f2f2ef,#9c9c97);box-shadow:inset 0 0 0 1px rgba(0,0,0,.15)}
+.screw:after{content:"";position:absolute;left:2px;right:2px;top:5px;height:1px;background:#7a7a75;transform:rotate(35deg)}
+.s1{top:12px;left:12px}.s2{top:12px;right:12px}.s3{bottom:12px;left:12px}.s4{bottom:12px;right:12px}
+.antenna{position:absolute;top:-40px;left:44px;width:18px;height:48px;border-radius:9px 9px 3px 3px;background:linear-gradient(90deg,#111,#3a3a3a 45%,#111)}
+.antenna:after{content:"";position:absolute;top:5px;left:4px;width:10px;height:10px;border-radius:50%;background:#2a2a2a}
+.antenna.tx:after{background:var(--org);box-shadow:0 0 12px var(--org)}
+.print{font:500 9.5px var(--mono);letter-spacing:.04em;color:var(--print);text-transform:lowercase}
+.hdr{display:flex;justify-content:space-between;align-items:center;padding:0 4px 10px;position:relative}
+.hdr b{font:700 12px var(--mono);color:var(--gph);letter-spacing:.02em}
+/* ---- OLED ---- */
+.lcd{position:relative;overflow:hidden;border-radius:12px;padding:16px 16px 14px;background:linear-gradient(172deg,var(--lcd1),var(--lcd2));color:var(--p);font-family:var(--vt);
+  box-shadow:inset 0 4px 8px rgba(0,0,0,.32),inset 0 0 0 1px rgba(0,0,0,.35),0 0 0 6px #262626,0 0 0 7px #8f8f8a;text-shadow:1.5px 1.5px 0 rgba(0,0,0,.09)}
+.lcd:before{content:"";position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(0deg,rgba(0,0,0,.025) 0 1px,transparent 1px 2px),repeating-linear-gradient(90deg,rgba(0,0,0,.025) 0 1px,transparent 1px 2px);z-index:2}
+.lcd:after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(115deg,rgba(255,255,255,.22) 0 22%,transparent 38%);z-index:2}
+.l-top{display:flex;justify-content:space-between;align-items:center;font-size:26px;line-height:1;letter-spacing:.06em}
+.bars{display:flex;gap:3px;align-items:flex-end;height:16px}
+.bars i{width:4px;background:var(--p)}
+.bars i:nth-child(1){height:5px}.bars i:nth-child(2){height:9px}.bars i:nth-child(3){height:12px}.bars i:nth-child(4){height:16px}
+.bars.off i{background:rgba(31,36,25,.12)}
+.l-ch{display:flex;align-items:baseline;gap:10px;margin-top:14px}
+.l-ch .tag{font-size:28px}
+.seg7{position:relative;flex:1;text-align:right;font-size:clamp(46px,14vw,62px);line-height:.9;letter-spacing:.04em;white-space:nowrap}
+.seg7 .ghost{position:absolute;right:0;top:0;color:rgba(31,36,25,.07);text-shadow:none}
+.seg7 .val{position:relative}
+.l-sub{display:flex;justify-content:space-between;gap:10px;font-size:20px;line-height:1.1;margin-top:6px;opacity:.85;white-space:nowrap}
+.l-sub span:first-child{flex:none}.l-sub span:last-child{flex:1;overflow:hidden;text-overflow:ellipsis;text-align:right}
+.l-state{font-size:30px;line-height:1;margin-top:10px;letter-spacing:.04em}
+.l-state.inv{display:inline-block;background:var(--p);color:var(--lcd1);text-shadow:none;padding:2px 8px 0}
+.l-state.blink{animation:blink 1s steps(2) infinite}
+@keyframes blink{50%{opacity:.35}}
+.l-log{font-size:19px;line-height:1.1;margin-top:8px;opacity:.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:21px}
+.l-chips{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;position:relative;z-index:3}
+.chip{font-family:var(--vt);font-size:19px;line-height:1;border:1.5px solid var(--p);color:var(--p);background:none;border-radius:4px;padding:5px 10px 3px;text-shadow:inherit;cursor:pointer}
+.chip.on{background:var(--p);color:var(--lcd1);text-shadow:none}
+/* ---- keys ---- */
+.keys{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px 16px;margin-top:24px;position:relative}
+.kc{display:flex;flex-direction:column;align-items:center;gap:7px}
+.key{width:100%;aspect-ratio:1;border:none;border-radius:14px;display:flex;align-items:center;justify-content:center;cursor:pointer;position:relative;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.55),inset 0 -3px 0 rgba(0,0,0,.18),0 3px 0 rgba(0,0,0,.28),0 6px 12px rgba(0,0,0,.18);transition:transform .06s,box-shadow .06s}
+.key svg{width:30px;height:30px}
+.key .no{position:absolute;top:7px;left:9px;font:500 9px var(--mono);opacity:.55}
+.key:active,.key.press{transform:translateY(3px);box-shadow:inset 0 1px 0 rgba(255,255,255,.4),inset 0 -1px 0 rgba(0,0,0,.18),0 0 0 rgba(0,0,0,.28),0 2px 4px rgba(0,0,0,.18)}
+.c-wht{background:linear-gradient(180deg,#fff,var(--wht));color:#1c1c1c}
+.c-gph{background:linear-gradient(180deg,#3b3b3b,var(--gph));color:#f1f1ee;box-shadow:inset 0 1px 0 rgba(255,255,255,.12),inset 0 -3px 0 rgba(0,0,0,.4),0 3px 0 rgba(0,0,0,.35),0 6px 12px rgba(0,0,0,.2)}
+.c-gry{background:linear-gradient(180deg,#b3b3ae,var(--gry));color:#1c1c1c}
+.c-org{background:linear-gradient(180deg,var(--org2),var(--org));color:#1a0a03}
+.key.power.live{box-shadow:inset 0 1px 0 rgba(255,255,255,.5),0 3px 0 #b53a0c,0 0 0 3px rgba(255,91,31,.35),0 0 26px rgba(255,91,31,.65)}
+.key.power .led{position:absolute;top:8px;right:9px;width:6px;height:6px;border-radius:50%;background:#7a2a0c}
+.key.power.live .led{background:#fff;box-shadow:0 0 8px #fff}
+.key:focus-visible,.chip:focus-visible,.grille:focus-visible,.switch:focus-visible{outline:2px solid var(--org);outline-offset:3px}
+.kl{display:flex;flex-direction:column;align-items:center;line-height:1.2;text-align:center}
+.kl small{font:400 9px var(--mono);color:#6c6c67}
+/* ---- grille ---- */
+.grille{position:relative;margin-top:24px;height:168px;border-radius:16px;cursor:pointer;touch-action:none;display:flex;align-items:center;justify-content:center;
+  background-color:rgba(0,0,0,.04);box-shadow:inset 0 1px 2px rgba(0,0,0,.15),0 1px 0 rgba(255,255,255,.6);
+  background-image:radial-gradient(circle,#1f1f1f 0 4px,rgba(0,0,0,.25) 4.6px,transparent 5.4px);background-size:20px 20px;background-repeat:space;background-position:center;transition:filter .15s}
+.grille .lbl{background:var(--alu2);padding:8px 14px;border-radius:8px;font:700 13px var(--mono);letter-spacing:.02em;color:var(--gph);text-align:center;line-height:1.3;box-shadow:0 0 0 6px var(--alu2)}
+.grille .lbl small{display:block;font:400 9.5px var(--mono);color:#5f5f5a}
+.grille.held{background-image:radial-gradient(circle,var(--org) 0 4px,rgba(255,91,31,.35) 4.6px,transparent 6px);background-color:#1a1a1a}
+.grille.held .lbl{background:#1a1a1a;box-shadow:0 0 0 6px #1a1a1a;color:var(--org)}
+.grille.held .lbl small{color:#c9c9c4}
+.side{display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding:0 2px;position:relative}
+.switch{display:flex;align-items:center;gap:8px;background:none;border:none;font:500 10px var(--mono);color:var(--print);cursor:pointer;min-height:44px;padding:0}
+.switch i{position:relative;width:44px;height:20px;border-radius:4px;background:#2b2b2b;box-shadow:inset 0 2px 3px rgba(0,0,0,.6)}
+.switch i:after{content:"";position:absolute;top:2px;left:2px;width:18px;height:16px;border-radius:3px;background:linear-gradient(180deg,#eee,#bbb);transition:.18s}
+.switch.on i:after{left:24px;background:linear-gradient(180deg,var(--org2),var(--org))}
+/* ---- spec drawers ---- */
+.drawer{margin-top:14px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:2px 16px}
+.drawer summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;align-items:center;min-height:50px;font:700 13px var(--mono)}
+.drawer summary::-webkit-details-marker{display:none}
+.drawer summary b{font-weight:400;color:var(--mut);font-size:12px}
+.drawer summary:before{content:"+";width:20px;color:var(--org);font-weight:700}
+.drawer[open] summary:before{content:"–"}
+.drawer summary span{flex:1}
+.drawer[open] summary{border-bottom:1px solid var(--line)}
+.row{display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
+.row:first-of-type{border-top:none}
+.row .m{flex:1}.row .n{font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .h{font-size:11.5px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row.pick{cursor:pointer;min-height:44px}.row.pick.sel .n{color:var(--org)}
+.tagp{font-size:9.5px;background:var(--ink);color:var(--page);border-radius:3px;padding:1px 5px;margin-left:6px;font-weight:700}
+.tog{position:relative;width:50px;height:28px;flex:none;cursor:pointer}
+.tog input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer;z-index:1}
+.tog span{position:absolute;inset:0;border-radius:5px;background:#2b2b2b;pointer-events:none}
+.tog span:after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:4px;background:var(--live);transition:.18s}
+.tog input:checked+span:after{left:25px;background:var(--org);box-shadow:none}
+.tog input:focus-visible+span{outline:2px solid var(--org);outline-offset:2px}
+.legend{display:flex;gap:14px;font-size:11px;color:var(--mut);padding:10px 0 4px}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.empty{color:var(--mut);font-size:12px;padding:12px 0}
+.note{color:var(--mut);font-size:11.5px;line-height:1.55;padding:2px 0 12px}
+.demo{margin-top:16px;text-align:center;color:var(--mut);font-size:11.5px}
+.lock{position:fixed;inset:0;background:var(--page);display:none;align-items:center;justify-content:center;padding:30px;text-align:center;line-height:1.7;color:var(--mut);z-index:9}
+.lock b{color:var(--org)}
+@media (prefers-reduced-motion:reduce){.l-state.blink{animation:none}}
+@media (max-width:360px){.radio{padding:22px 14px 18px}.keys{gap:12px}.key svg{width:26px;height:26px}}
+.btn{font:700 12px var(--mono);border:none;border-radius:8px;padding:11px 14px;min-height:44px;cursor:pointer;background:var(--gph);color:#f1f1ee}
+.btn.org{background:var(--org);color:#1a0a03}.btn.ghost{background:none;color:var(--ink);border:1px solid var(--line)}
+.btns{display:flex;gap:8px;flex-wrap:wrap;padding:4px 0 14px}
+.kv{display:grid;grid-template-columns:7.5em minmax(0,1fr);gap:8px 10px;align-items:center;padding:12px 0}
+.kv label{font-size:12px;color:var(--mut)}
+.kv input{font:16px var(--mono);padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--page);color:var(--ink);width:100%}
+.kv input:focus{outline:2px solid var(--org);outline-offset:1px}
+.steps{margin:0;padding:6px 0 12px 18px;font-size:12px;line-height:1.7;color:var(--ink)}
+.steps b{color:var(--org)}
+.key .flash{position:absolute;inset:0;border-radius:14px;box-shadow:0 0 0 3px var(--org);opacity:0;transition:opacity .4s}
+.key.sent .flash{opacity:1;transition:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="radio">
+    <i class="screw s1"></i><i class="screw s2"></i><i class="screw s3"></i><i class="screw s4"></i>
+    <div class="antenna" id="ant"></div>
+    <div class="hdr"><b>rm-01 bt</b><span class="print">bluetooth keyboard · no laptop app</span></div>
+
+    <div class="lcd">
+      <div class="l-top"><span id="conn">STARTING</span>
+        <div class="bars" id="bars"><i></i><i></i><i></i><i></i></div></div>
+      <div class="l-ch"><span class="tag">CH</span>
+        <div class="seg7"><span class="ghost">88·8888</span><span class="val" id="chVal">--·----</span></div></div>
+      <div class="l-sub"><span id="chKind">BT HOST</span><span id="chTitle">no laptop paired</span></div>
+      <div class="l-state" id="state">NO LINK</div>
+      <div class="l-log" id="log">&gt; ready</div>
+      <div class="l-chips">
+        <button class="chip" id="chipMode">PTT·TEAMS</button>
+        <button class="chip" id="chipLock">LOCK</button>
+        <button class="chip" id="chipPair" style="margin-left:auto">PAIR</button>
+      </div>
+    </div>
+
+    <div class="keys">
+      <div class="kc"><button class="key c-wht" id="kTeams" aria-label="Teams mute toggle"><span class="no">01</span><i class="flash"></i>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M9 7v11"/><circle cx="18" cy="7" r="2"/><path d="M15 12h6v4a3 3 0 0 1-6 0z"/></svg></button>
+        <span class="kl print">teams<small id="lTeams">ctrl shift m</small></span></div>
+      <div class="kc"><button class="key c-gph" id="kUp" aria-label="Next laptop"><span class="no">02</span>
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 7l7 9H5z"/></svg></button>
+        <span class="kl print">ch +<small>next laptop</small></span></div>
+      <div class="kc"><button class="key c-org power" id="kPower" aria-label="Windows call mute"><span class="no">03</span><i class="led"></i><i class="flash"></i>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.4 6.6a8 8 0 1 0 11.2 0"/></svg></button>
+        <span class="kl print">call mute<small id="lMute">win alt k</small></span></div>
+      <div class="kc"><button class="key c-wht" id="kMeet" aria-label="Meet mute toggle"><span class="no">04</span><i class="flash"></i>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="7" width="12" height="10" rx="2"/><path d="M15 11l6-3.5v9L15 13z"/></svg></button>
+        <span class="kl print">meet<small id="lMeet">ctrl d</small></span></div>
+      <div class="kc"><button class="key c-gph" id="kDown" aria-label="Previous laptop"><span class="no">05</span>
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 17l7-9H5z"/></svg></button>
+        <span class="kl print">ch −<small>prev laptop</small></span></div>
+      <div class="kc"><button class="key c-gry" id="kMode" aria-label="Push-to-talk mode"><span class="no">06</span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4l-3 3 3 3"/><path d="M4 7h13"/><path d="M17 20l3-3-3-3"/><path d="M20 17H7"/></svg></button>
+        <span class="kl print">ptt mode<small id="modeLbl">teams</small></span></div>
+    </div>
+
+    <div class="grille" id="ptt" tabindex="0" role="button" aria-label="Push to talk">
+      <div class="lbl" id="pttLbl">push to talk<small>hold</small></div>
+    </div>
+
+    <div class="side">
+      <span class="print">keys go to the focused window</span>
+      <button class="switch" id="swLock"><i></i>lock tx</button>
+    </div>
+  </div>
+
+  <details class="drawer" id="dLaptops" open>
+    <summary><span>laptops</span><b id="hostSum">0 paired</b></summary>
+    <div id="hosts"></div>
+    <div class="btns"><button class="btn org" id="bPair">pair a new laptop</button><button class="btn ghost" id="bBt">bluetooth settings</button></div>
+    <ol class="steps" id="pairSteps" hidden>
+      <li>Tap <b>pair a new laptop</b> and allow the phone to be visible.</li>
+      <li>On the laptop: <b>Settings › Bluetooth &amp; devices › Add device › Bluetooth</b>.</li>
+      <li>Pick this phone (<span id="phoneName">your phone</span>) and confirm the code on both screens.</li>
+      <li>Windows adds it as a keyboard. It shows here and reconnects from now on.</li>
+    </ol>
+  </details>
+  <details class="drawer">
+    <summary><span>key map</span><b>edit shortcuts</b></summary>
+    <div class="kv">
+      <label for="mTeams">teams</label><input id="mTeams" autocomplete="off" spellcheck="false">
+      <label for="mMeet">meet</label><input id="mMeet" autocomplete="off" spellcheck="false">
+      <label for="mMute">call mute</label><input id="mMute" autocomplete="off" spellcheck="false">
+      <label for="mPtt">teams ptt</label><input id="mPtt" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="btns"><button class="btn" id="bSaveMap">save</button><button class="btn ghost" id="bResetMap">defaults</button></div>
+    <div class="note">Write keys like <b>ctrl+shift+m</b>, <b>win+alt+k</b>, <b>ctrl+space</b>. Modifiers: ctrl, shift, alt, win.</div>
+  </details>
+  <details class="drawer">
+    <summary><span>how it works</span><b>read once</b></summary>
+    <div class="note" style="padding-top:12px">
+      The phone pairs with the laptop as a <b>Bluetooth keyboard</b>, so Windows needs no app.<br><br>
+      <b>call mute · win+alt+k</b>: Windows 11 mutes or unmutes Teams calls from any window. Teams shows the change.<br>
+      <b>teams · ctrl+shift+m</b> and <b>meet · ctrl+d</b> go to whatever window is in front. For an <b>RDP</b> call, keep the Remote Desktop window in front and Teams in front inside it.<br>
+      <b>push to talk</b>: Teams mode holds Ctrl+Space (stay muted in Teams first). Win11 mode sends win+alt+k when you press and again when you let go.<br><br>
+      Bluetooth can't mute the microphone hardware or a single app. That still needs the Wi-Fi agent (RemoteMic.exe).
+    </div>
+  </details>
+  <div class="demo" id="demoNote" hidden>Preview only. Install the Remote Mic APK on your phone to send keys over Bluetooth.</div>
+</div>
+<script>
+{
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const store = { get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+                set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} } };
+
+// ---------- native bridge (Android) or preview stand-in ----------
+const DEMO = !window.RM;
+const fake = { state: 'connected', hosts: [{ name: 'WIPRO-LT-0421', address: 'AA:01' }, { name: 'HOME-PC', address: 'AA:02' }], host: null, last: '' };
+fake.host = fake.hosts[0];
+const RM = window.RM || {
+  status: () => JSON.stringify({ supported: true, bt_on: true, registered: true, state: fake.state, holding: false, error: '', last: fake.last,
+                                 phone: 'Pixel', host: fake.host, hosts: fake.hosts, preferred: fake.host.address }),
+  tap: c => { fake.last = c; return 'ok'; }, hold: c => { fake.last = c + ' (held)'; return 'ok'; }, release() {},
+  connect: a => { fake.host = fake.hosts.find(h => h.address === a); setTimeout(() => window.onNative(), 300); },
+  disconnect() {}, retry() {}, discoverable() {}, openBluetoothSettings() {}, vibrate() {}
+};
+if (DEMO) $('demoNote').hidden = false;
+const buzz = ms => { try { RM.vibrate(ms); } catch (e) {} try { navigator.vibrate && navigator.vibrate(ms); } catch (e) {} };
+
+const DEF = { teams: 'ctrl+shift+m', meet: 'ctrl+d', mute: 'win+alt+k', ptt: 'ctrl+space' };
+let MAP = Object.assign({}, DEF, store.get('rm_map', {}));
+let lastErr = '', S = {}, pttMode = store.get('rm_bt_ptt', 'teams'), talking = false, latched = false, flashT = null;
+
+const pretty = c => c.split('+').join(' ');
+function log(t) { $('log').textContent = '> ' + t; }
+function flash(id) { const k = $(id); k.classList.add('sent'); setTimeout(() => k.classList.remove('sent'), 30); }
+const linked = () => S.state === 'connected';
+const code4 = n => (n || '----').replace(/[^a-z0-9]/gi, '').toUpperCase().slice(0, 4).padEnd(4, '-');
+
+function paint() {
+  const hosts = S.hosts || [];
+  const cur = S.host || hosts.find(h => h.address === S.preferred);
+  const idx = cur ? hosts.findIndex(h => h.address === cur.address) : -1;
+  $('chVal').textContent = (idx >= 0 ? String(idx + 1).padStart(2, '0') : '--') + '·' + code4(cur && cur.name);
+  $('chTitle').textContent = cur ? cur.name : 'no laptop paired';
+  $('conn').textContent = DEMO ? 'PREVIEW' : !S.bt_on ? 'BT OFF' : S.state === 'connected' ? 'CONNECTED'
+    : S.state === 'connecting' ? 'LINKING…' : !S.registered ? 'STARTING' : 'NO LINK';
+  $('bars').className = 'bars' + (linked() ? '' : ' off');
+  const st = $('state');
+  st.textContent = talking ? 'TX ▶ TALKING' : linked() ? 'READY' : 'NO LINK';
+  st.className = 'l-state' + (talking ? ' inv blink' : '');
+  $('ant').className = 'antenna' + (talking ? ' tx' : '');
+  if (S.error && S.error !== lastErr) log(S.error);
+  lastErr = S.error;
+  $('chipMode').textContent = 'PTT·' + (pttMode === 'teams' ? 'TEAMS' : 'WIN11');
+  $('modeLbl').textContent = pttMode === 'teams' ? pretty(MAP.ptt) : 'win11 toggle';
+  $('chipLock').classList.toggle('on', latched); $('swLock').classList.toggle('on', latched);
+  $('lTeams').textContent = pretty(MAP.teams); $('lMeet').textContent = pretty(MAP.meet); $('lMute').textContent = pretty(MAP.mute);
+  if (!talking) $('pttLbl').innerHTML = 'push to talk<small>' + (pttMode === 'teams' ? 'hold · ' + esc(pretty(MAP.ptt)) : 'hold · ' + esc(pretty(MAP.mute)) + ' in and out') + '</small>';
+  $('hostSum').textContent = hosts.length + ' paired';
+  $('phoneName').textContent = S.phone || 'your phone';
+  $('hosts').innerHTML = hosts.length ? hosts.map(h => {
+    const on = S.host && S.host.address === h.address && linked();
+    return `<div class="row pick ${on ? 'sel' : ''}" data-a="${esc(h.address)}"><div class="m"><div class="n">${esc(h.name)}</div>
+      <div class="h">${on ? 'connected · keys go here' : 'tap to connect'}</div></div>${on ? '<span class="tagp">LIVE</span>' : ''}</div>`;
+  }).join('') : '<div class="empty">No laptop paired yet. Pair one below (one time).</div>';
+  $('pairSteps').hidden = hosts.length > 0 && !$('pairSteps').dataset.show;
+}
+function refresh() { try { S = JSON.parse(RM.status()); } catch (e) { S = { error: 'bridge error' }; } paint(); }
+window.onNative = refresh;
+
+function send(id, combo, label) {
+  buzz(25); flash(id);
+  if (!linked()) { log('not connected: pick a laptop below'); buzz([60, 60, 60]); return; }
+  const r = RM.tap(combo);
+  log(r === 'ok' ? `sent ${pretty(combo)}${label ? ' · ' + label : ''}` : 'bad shortcut: ' + r);
+}
+$('kTeams').onclick = () => send('kTeams', MAP.teams, 'teams mute');
+$('kMeet').onclick = () => send('kMeet', MAP.meet, 'meet mute');
+$('kPower').onclick = () => send('kPower', MAP.mute, 'call mute');
+
+function step(d) {
+  const hosts = S.hosts || []; if (!hosts.length || talking) return;
+  const cur = S.host ? hosts.findIndex(h => h.address === S.host.address) : -1;
+  const next = hosts[(cur + d + hosts.length) % hosts.length];
+  buzz(12); log('linking ' + next.name + '…'); RM.connect(next.address);
+}
+$('kUp').onclick = () => step(1); $('kDown').onclick = () => step(-1);
+$('hosts').onclick = e => { const r = e.target.closest('.pick'); if (r) { buzz(12); RM.connect(r.dataset.a); log('linking…'); } };
+
+const swapMode = () => { if (talking) return; pttMode = pttMode === 'teams' ? 'win11' : 'teams'; store.set('rm_bt_ptt', pttMode); buzz(12);
+  log(pttMode === 'teams' ? 'PTT: Teams hold (stay muted in Teams)' : 'PTT: Win11 call mute in/out'); paint(); };
+$('kMode').onclick = swapMode; $('chipMode').onclick = swapMode;
+
+// ---------- push to talk ----------
+const ptt = $('ptt');
+function talkStart() {
+  if (talking) return;
+  if (!linked()) { log('not connected: pick a laptop below'); buzz([60, 60, 60]); latched = false; paint(); return; }
+  talking = true; ptt.classList.add('held'); buzz(20);
+  $('pttLbl').innerHTML = 'transmitting<small>' + (latched ? 'locked · tap to stop' : 'release to mute') + '</small>';
+  const r = pttMode === 'teams' ? RM.hold(MAP.ptt) : RM.tap(MAP.mute);
+  log(r === 'ok' ? (pttMode === 'teams' ? 'TX: holding ' + pretty(MAP.ptt) : 'TX: unmuted via ' + pretty(MAP.mute)) : 'bad shortcut: ' + r);
+  paint();
+}
+function talkStop() {
+  if (!talking) return;
+  talking = false; latched = false; ptt.classList.remove('held'); buzz(15);
+  if (pttMode === 'teams') RM.release(); else RM.tap(MAP.mute);
+  log('released: muted'); paint();
+}
+ptt.addEventListener('pointerdown', e => { e.preventDefault(); if (latched) return talkStop(); try { ptt.setPointerCapture(e.pointerId); } catch (x) {} talkStart(); });
+['pointerup', 'pointercancel'].forEach(ev => ptt.addEventListener(ev, () => { if (!latched) talkStop(); }));
+ptt.addEventListener('contextmenu', e => e.preventDefault());
+const toggleLock = () => { if (latched) return talkStop(); latched = true; if (talking) return paint(); talkStart(); };
+$('swLock').onclick = toggleLock; $('chipLock').onclick = toggleLock;
+document.addEventListener('visibilitychange', () => { if (document.hidden) talkStop(); else refresh(); });
+
+// ---------- pairing & key map ----------
+const pair = () => { $('pairSteps').dataset.show = '1'; $('pairSteps').hidden = false; $('dLaptops').open = true; RM.discoverable(); log('phone visible for 2 min: add it from Windows'); };
+$('bPair').onclick = pair; $('chipPair').onclick = pair;
+$('bBt').onclick = () => RM.openBluetoothSettings();
+const fillMap = () => { $('mTeams').value = MAP.teams; $('mMeet').value = MAP.meet; $('mMute').value = MAP.mute; $('mPtt').value = MAP.ptt; };
+$('bSaveMap').onclick = () => {
+  const m = { teams: $('mTeams').value.trim().toLowerCase(), meet: $('mMeet').value.trim().toLowerCase(),
+              mute: $('mMute').value.trim().toLowerCase(), ptt: $('mPtt').value.trim().toLowerCase() };
+  const bad = Object.values(m).find(v => !/^((ctrl|shift|alt|win)\+)*([a-z0-9]|space|enter|tab|esc|f([1-9]|1[0-2]))$/.test(v));
+  if (bad !== undefined) { log('bad shortcut: ' + (bad || '(empty)')); buzz([60, 60, 60]); return; }
+  MAP = m; store.set('rm_map', MAP); log('key map saved'); buzz(20); paint();
+};
+$('bResetMap').onclick = () => { MAP = Object.assign({}, DEF); store.set('rm_map', {}); fillMap(); paint(); log('defaults restored'); };
+
+fillMap(); refresh();
+setInterval(() => { if (!document.hidden) refresh(); }, 2000);
+}
+</script>
+</body>
+</html>

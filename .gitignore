@@ -1,0 +1,10 @@
+config.json
+remote-mic.log
+__pycache__/
+build/
+dist/
+*.spec
+android/.gradle/
+android/app/build/
+android/local.properties
+android/.idea/
